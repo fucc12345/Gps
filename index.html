@@ -2,15 +2,75 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ETA Calculator</title>
+  <title>Live ETA Calculator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4; }
-    h1 { text-align: center; }
-    .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-    label, input, button { display: block; width: 100%; margin: 10px 0; }
-    input, button { padding: 10px; font-size: 16px; }
-    #output { margin-top: 20px; font-weight: bold; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(to right, #6dd5fa, #ffffff);
+      margin: 0;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 500px;
+      margin: auto;
+      background: #fff;
+      padding: 25px;
+      border-radius: 15px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      text-align: center;
+      color: #0077cc;
+      margin-bottom: 20px;
+    }
+
+    label {
+      font-weight: bold;
+      display: block;
+      margin-top: 10px;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+
+    button {
+      background-color: #0077cc;
+      color: white;
+      padding: 12px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      margin-top: 15px;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    button:hover {
+      background-color: #005fa3;
+    }
+
+    #output {
+      margin-top: 20px;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .note {
+      font-size: 14px;
+      color: #777;
+      margin-top: 10px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -23,16 +83,16 @@
     <label for="destLon">Destination Longitude:</label>
     <input type="number" step="any" id="destLon" placeholder="e.g. 80.0515">
 
-    <button onclick="calculateETA()">Get ETA</button>
+    <button onclick="startTracking()">Start Tracking</button>
 
-    <div id="output">Waiting for GPS...</div>
+    <div id="output">Waiting for location...</div>
+    <div class="note">Updates every 1 second</div>
   </div>
 
   <script>
-    let watchId;
-    let currentSpeed = 0;
+    let intervalId;
 
-    function calculateETA() {
+    function startTracking() {
       const destLat = parseFloat(document.getElementById("destLat").value);
       const destLon = parseFloat(document.getElementById("destLon").value);
 
@@ -41,34 +101,53 @@
         return;
       }
 
-      if (navigator.geolocation) {
-        navigator.geolocation.watchPosition(
-          position => {
-            const { latitude, longitude, speed } = position.coords;
-            currentSpeed = speed || 10; // fallback speed (m/s) if null
+      // Save destination to localStorage
+      localStorage.setItem("destLat", destLat);
+      localStorage.setItem("destLon", destLon);
 
-            const distance = getDistanceFromLatLonInKm(latitude, longitude, destLat, destLon);
-            const speedKmh = currentSpeed * 3.6; // convert m/s to km/h
-            const etaHours = distance / speedKmh;
-            const etaMinutes = Math.round(etaHours * 60);
+      if (intervalId) clearInterval(intervalId);
 
-            document.getElementById("output").innerHTML =
-              `📍 Current Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>
-               🚀 Speed: ${speedKmh.toFixed(2)} km/h<br>
-               📏 Distance Left: ${distance.toFixed(2)} km<br>
-               ⏱️ ETA: ${etaMinutes} minutes`;
-          },
-          error => {
-            document.getElementById("output").innerText = "Error getting location: " + error.message;
-          },
-          { enableHighAccuracy: true, maximumAge: 0 }
-        );
-      } else {
-        document.getElementById("output").innerText = "Geolocation not supported.";
-      }
+      intervalId = setInterval(() => {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            position => {
+              const { latitude, longitude, speed } = position.coords;
+              const currentSpeed = speed ?? 10; // fallback speed in m/s
+
+              const distanceKm = getDistance(latitude, longitude, destLat, destLon);
+              const speedKmh = currentSpeed * 3.6;
+              const etaHours = distanceKm / (speedKmh || 1);
+              const etaMinutes = Math.round(etaHours * 60);
+
+              // Arrival time calculation
+              const now = new Date();
+              const arrivalTime = new Date(now.getTime() + etaHours * 3600000);
+              const arrivalFormatted = arrivalTime.toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+              });
+
+              document.getElementById("output").innerHTML = `
+                📍 Current Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>
+                🚀 Speed: ${speedKmh.toFixed(2)} km/h<br>
+                📏 Distance Left: ${distanceKm.toFixed(2)} km<br>
+                ⏱️ ETA: ${etaMinutes} minutes (${etaHours.toFixed(2)} hrs)<br>
+                🕓 Estimated Arrival Time: ${arrivalFormatted}
+              `;
+            },
+            error => {
+              document.getElementById("output").innerText = "Error getting location: " + error.message;
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+          );
+        } else {
+          document.getElementById("output").innerText = "Geolocation not supported.";
+        }
+      }, 1000);
     }
 
-    function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+    function getDistance(lat1, lon1, lat2, lon2) {
       const R = 6371; // Radius of Earth in km
       const dLat = deg2rad(lat2 - lat1);
       const dLon = deg2rad(lon2 - lon1);
@@ -83,6 +162,16 @@
     function deg2rad(deg) {
       return deg * (Math.PI / 180);
     }
+
+    // Prefill previous destination from memory
+    window.onload = () => {
+      const storedLat = localStorage.getItem("destLat");
+      const storedLon = localStorage.getItem("destLon");
+      if (storedLat && storedLon) {
+        document.getElementById("destLat").value = storedLat;
+        document.getElementById("destLon").value = storedLon;
+      }
+    };
   </script>
 </body>
 </html>
