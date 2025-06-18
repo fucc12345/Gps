@@ -135,21 +135,16 @@
   <script>
     // --- Configuration for Higher Accuracy ---
     const config = {
-      // This is the most important factor. It estimates road distance is 30% longer 
-      // than the straight-line distance. Adjust for city (1.4) vs. highway (1.2).
       ROAD_TO_STRAIGHT_LINE_RATIO: 1.3,
-      // We only count time and distance towards the average speed if you're moving faster than this.
-      // This prevents "GPS drift" while stationary from ruining the average.
       MIN_SPEED_FOR_MOVING_KMH: 4, 
-      // Auto-stop when within this distance of the destination.
       ARRIVAL_THRESHOLD_METERS: 50,
-      // Geolocation settings for best results.
       GPS_OPTIONS: { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     };
 
     // --- State Management ---
     const state = {
       watchId: null,
+      renderIntervalId: null, // ADDED: To hold the ID of our 5-second interval
       destination: null,
       lastPosition: null,
       totalDistanceTraveledKm: 0,
@@ -176,10 +171,12 @@
       localStorage.setItem("destLat", destLat);
       localStorage.setItem("destLon", destLon);
       
-      // Full reset of state for a new journey
       if (state.watchId) navigator.geolocation.clearWatch(state.watchId);
+      if (state.renderIntervalId) clearInterval(state.renderIntervalId); // ADDED: Clear any old interval
+      
       Object.assign(state, {
           watchId: null,
+          renderIntervalId: null,
           destination: { lat: destLat, lon: destLon },
           lastPosition: null,
           totalDistanceTraveledKm: 0,
@@ -191,12 +188,19 @@
       toggleUI(true);
 
       state.watchId = navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, config.GPS_OPTIONS);
+      // ADDED: Start an interval to update the display every 5 seconds (5000 milliseconds)
+      state.renderIntervalId = setInterval(renderOutput, 5000); 
     }
 
     function stopTracking(message = "Tracking stopped by user.") {
       if (state.watchId) {
         navigator.geolocation.clearWatch(state.watchId);
         state.watchId = null;
+        
+        // ADDED: Stop the 5-second display update interval
+        clearInterval(state.renderIntervalId);
+        state.renderIntervalId = null;
+
         outputDiv.innerHTML += `<br><strong>✅ ${message}</strong>`;
         toggleUI(false);
       }
@@ -207,15 +211,14 @@
       state.currentSpeedKmh = (speed || 0) * 3.6;
 
       if (!state.lastPosition) {
-        // This is the first update, just record the position and wait for the next one.
         state.lastPosition = { lat: latitude, lon: longitude, timestamp: position.timestamp };
+        renderOutput(); // ADDED: Render once immediately on first GPS fix
         return;
       }
       
       const distanceIncrementKm = getDistance(state.lastPosition.lat, state.lastPosition.lon, latitude, longitude);
       const timeIncrementSeconds = (position.timestamp - state.lastPosition.timestamp) / 1000;
 
-      // Only accumulate distance and time if actually moving. This is the key to an accurate journey average speed.
       if (state.currentSpeedKmh > config.MIN_SPEED_FOR_MOVING_KMH) {
         state.totalDistanceTraveledKm += distanceIncrementKm;
         state.totalTimeMovingSeconds += timeIncrementSeconds;
@@ -223,14 +226,25 @@
       
       state.lastPosition = { lat: latitude, lon: longitude, timestamp: position.timestamp };
 
-      renderOutput(latitude, longitude);
+      // REMOVED: The call to renderOutput() was removed from here. 
+      // The new setInterval will handle rendering.
     }
 
     function onPositionError(error) {
       stopTracking(`Error: ${error.message}`);
     }
 
-    function renderOutput(currentLat, currentLon) {
+    // CHANGED: The function no longer takes arguments, it reads from the global 'state'.
+    function renderOutput() {
+      // ADDED: If we don't have a position yet, don't try to render.
+      if (!state.lastPosition) {
+        return;
+      }
+      
+      // ADDED: Get current position from the state object.
+      const currentLat = state.lastPosition.lat;
+      const currentLon = state.lastPosition.lon;
+
       const remainingStraightLineKm = getDistance(currentLat, currentLon, state.destination.lat, state.destination.lon);
       
       if (remainingStraightLineKm * 1000 < config.ARRIVAL_THRESHOLD_METERS) {
@@ -238,12 +252,10 @@
         return;
       }
 
-      // **ACCURACY UPGRADE**: Apply the correction factor for a realistic road distance.
       const effectiveRemainingKm = remainingStraightLineKm * config.ROAD_TO_STRAIGHT_LINE_RATIO;
       
       let journeyAvgSpeedKmh = 0;
       if (state.totalTimeMovingSeconds > 0) {
-        // **ACCURACY UPGRADE**: Calculate the stable average speed based on moving time.
         journeyAvgSpeedKmh = state.totalDistanceTraveledKm / (state.totalTimeMovingSeconds / 3600);
       }
       
@@ -310,6 +322,14 @@
       if (lat && lon) {
         destLatInput.value = lat;
         destLonInput.value = lon;
+      }
+      
+      // ADDED: Code to trigger the native Android notification
+      // This checks if the 'Android' interface provided by your app exists.
+      // If it does, it calls the 'showNotification' method.
+      // This will do nothing in a regular browser, preventing errors.
+      if (window.Android && typeof window.Android.showNotification === 'function') {
+        window.Android.showNotification("Welcome! The ETA Tracker is ready.");
       }
     };
   </script>
