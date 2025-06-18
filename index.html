@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ETA Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4; }
+    h1 { text-align: center; }
+    .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    label, input, button { display: block; width: 100%; margin: 10px 0; }
+    input, button { padding: 10px; font-size: 16px; }
+    #output { margin-top: 20px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ETA Calculator</h1>
+
+    <label for="destLat">Destination Latitude:</label>
+    <input type="number" step="any" id="destLat" placeholder="e.g. 16.2346">
+
+    <label for="destLon">Destination Longitude:</label>
+    <input type="number" step="any" id="destLon" placeholder="e.g. 80.0515">
+
+    <button onclick="calculateETA()">Get ETA</button>
+
+    <div id="output">Waiting for GPS...</div>
+  </div>
+
+  <script>
+    let watchId;
+    let currentSpeed = 0;
+
+    function calculateETA() {
+      const destLat = parseFloat(document.getElementById("destLat").value);
+      const destLon = parseFloat(document.getElementById("destLon").value);
+
+      if (!destLat || !destLon) {
+        alert("Please enter valid destination coordinates.");
+        return;
+      }
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          position => {
+            const { latitude, longitude, speed } = position.coords;
+            currentSpeed = speed || 10; // fallback speed (m/s) if null
+
+            const distance = getDistanceFromLatLonInKm(latitude, longitude, destLat, destLon);
+            const speedKmh = currentSpeed * 3.6; // convert m/s to km/h
+            const etaHours = distance / speedKmh;
+            const etaMinutes = Math.round(etaHours * 60);
+
+            document.getElementById("output").innerHTML =
+              `📍 Current Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>
+               🚀 Speed: ${speedKmh.toFixed(2)} km/h<br>
+               📏 Distance Left: ${distance.toFixed(2)} km<br>
+               ⏱️ ETA: ${etaMinutes} minutes`;
+          },
+          error => {
+            document.getElementById("output").innerText = "Error getting location: " + error.message;
+          },
+          { enableHighAccuracy: true, maximumAge: 0 }
+        );
+      } else {
+        document.getElementById("output").innerText = "Geolocation not supported.";
+      }
+    }
+
+    function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+      const R = 6371; // Radius of Earth in km
+      const dLat = deg2rad(lat2 - lat1);
+      const dLon = deg2rad(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function deg2rad(deg) {
+      return deg * (Math.PI / 180);
+    }
+  </script>
+</body>
+</html>
