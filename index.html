@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Enhanced Accuracy ETA Calculator</title>
+  <title>High-Accuracy ETA Calculator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     * { box-sizing: border-box; }
     body {
       font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(to right, #6dd5fa, #f0f8ff);
+      background: linear-gradient(to right, #83a4d4, #b6fbff);
       margin: 0;
       padding: 20px;
       display: flex;
@@ -23,12 +23,12 @@
       background: #fff;
       padding: 30px;
       border-radius: 15px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+      box-shadow: 0 10px 35px rgba(0, 0, 0, 0.15);
     }
 
     h1 {
       text-align: center;
-      color: #005a9c;
+      color: #004a7c;
       margin-bottom: 25px;
     }
 
@@ -94,29 +94,35 @@
       padding: 15px;
       background-color: #f9f9f9;
       border-radius: 8px;
-      border: 1px solid #eee;
+      border-left: 5px solid #0077cc;
       font-size: 16px;
-      line-height: 1.7;
+      line-height: 1.8;
+    }
+    
+    .output-value {
+        font-weight: bold;
+        color: #004a7c;
     }
 
     .note {
       font-size: 13px;
-      color: #777;
+      color: #666;
       margin-top: 15px;
       text-align: center;
+      line-height: 1.4;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Enhanced Accuracy ETA Calculator</h1>
-    <p class="note">This tool estimates arrival time based on your device's GPS and straight-line distance. It does not account for roads or traffic.</p>
+    <h1>High-Accuracy ETA Calculator</h1>
+    <p class="note">Uses your journey's average moving speed and a road-distance correction factor for a more realistic ETA.</p>
 
     <label for="destLat">Destination Latitude:</label>
-    <input type="number" step="any" id="destLat" placeholder="e.g., 40.7128">
+    <input type="number" step="any" id="destLat" placeholder="e.g., 34.0522">
 
     <label for="destLon">Destination Longitude:</label>
-    <input type="number" step="any" id="destLon" placeholder="e.g., -74.0060">
+    <input type="number" step="any" id="destLon" placeholder="e.g., -118.2437">
 
     <div class="button-group">
         <button id="startBtn" onclick="startTracking()">Start Tracking</button>
@@ -127,16 +133,28 @@
   </div>
 
   <script>
+    // --- Configuration for Higher Accuracy ---
+    const config = {
+      // This is the most important factor. It estimates road distance is 30% longer 
+      // than the straight-line distance. Adjust for city (1.4) vs. highway (1.2).
+      ROAD_TO_STRAIGHT_LINE_RATIO: 1.3,
+      // We only count time and distance towards the average speed if you're moving faster than this.
+      // This prevents "GPS drift" while stationary from ruining the average.
+      MIN_SPEED_FOR_MOVING_KMH: 4, 
+      // Auto-stop when within this distance of the destination.
+      ARRIVAL_THRESHOLD_METERS: 50,
+      // Geolocation settings for best results.
+      GPS_OPTIONS: { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    };
+
     // --- State Management ---
     const state = {
       watchId: null,
       destination: null,
-      // Exponential Moving Average (EMA) provides a smoothed, more realistic speed.
-      // A lower alpha value means more smoothing but slower reaction to speed changes.
-      emaAlpha: 0.3,
-      smoothedSpeedKmh: 0,
-      minSpeedForEtaKmh: 3, // Minimum speed to calculate an ETA
-      arrivalThresholdMeters: 50 // Auto-stop when within 50 meters
+      lastPosition: null,
+      totalDistanceTraveledKm: 0,
+      totalTimeMovingSeconds: 0,
+      currentSpeedKmh: 0,
     };
 
     // --- UI Elements ---
@@ -155,116 +173,131 @@
         return;
       }
 
-      // Save to localStorage for convenience
       localStorage.setItem("destLat", destLat);
       localStorage.setItem("destLon", destLon);
-
-      // Reset state for a new journey
+      
+      // Full reset of state for a new journey
       if (state.watchId) navigator.geolocation.clearWatch(state.watchId);
-      state.destination = { lat: destLat, lon: destLon };
-      state.smoothedSpeedKmh = 0;
+      Object.assign(state, {
+          watchId: null,
+          destination: { lat: destLat, lon: destLon },
+          lastPosition: null,
+          totalDistanceTraveledKm: 0,
+          totalTimeMovingSeconds: 0,
+          currentSpeedKmh: 0
+      });
 
       outputDiv.innerHTML = "Acquiring GPS signal...";
-      toggleButtons(true);
+      toggleUI(true);
 
-      const options = {
-        enableHighAccuracy: true,
-        maximumAge: 0, // Request fresh data each time
-        timeout: 10000 // Time to wait for a fix
-      };
-
-      state.watchId = navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, options);
+      state.watchId = navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, config.GPS_OPTIONS);
     }
 
-    function stopTracking() {
+    function stopTracking(message = "Tracking stopped by user.") {
       if (state.watchId) {
         navigator.geolocation.clearWatch(state.watchId);
         state.watchId = null;
-        outputDiv.innerHTML += "<br><strong>✅ Tracking stopped.</strong>";
-        toggleButtons(false);
+        outputDiv.innerHTML += `<br><strong>✅ ${message}</strong>`;
+        toggleUI(false);
       }
     }
 
     function onPositionUpdate(position) {
-      const { latitude, longitude, speed, accuracy } = position.coords;
-      
-      // The device-provided speed (in m/s) is often more reliable than manual calculation.
-      // Fallback to 0 if null or not a number.
-      const currentSpeedMs = (typeof speed === 'number') ? speed : 0;
-      const currentSpeedKmh = currentSpeedMs * 3.6;
+      const { latitude, longitude, speed } = position.coords;
+      state.currentSpeedKmh = (speed || 0) * 3.6;
 
-      // Apply Exponential Moving Average to the speed. This is the core of the improvement.
-      // It smooths out erratic GPS speed readings for a much more stable ETA.
-      state.smoothedSpeedKmh = (state.emaAlpha * currentSpeedKmh) + (1 - state.emaAlpha) * state.smoothedSpeedKmh;
-
-      const distanceKm = getDistance(latitude, longitude, state.destination.lat, state.destination.lon);
-
-      // Check for arrival
-      if (distanceKm * 1000 < state.arrivalThresholdMeters) {
-        outputDiv.innerHTML = `🎉 <strong>You have arrived!</strong>`;
-        stopTracking();
+      if (!state.lastPosition) {
+        // This is the first update, just record the position and wait for the next one.
+        state.lastPosition = { lat: latitude, lon: longitude, timestamp: position.timestamp };
         return;
       }
+      
+      const distanceIncrementKm = getDistance(state.lastPosition.lat, state.lastPosition.lon, latitude, longitude);
+      const timeIncrementSeconds = (position.timestamp - state.lastPosition.timestamp) / 1000;
 
-      renderOutput(latitude, longitude, accuracy, distanceKm);
+      // Only accumulate distance and time if actually moving. This is the key to an accurate journey average speed.
+      if (state.currentSpeedKmh > config.MIN_SPEED_FOR_MOVING_KMH) {
+        state.totalDistanceTraveledKm += distanceIncrementKm;
+        state.totalTimeMovingSeconds += timeIncrementSeconds;
+      }
+      
+      state.lastPosition = { lat: latitude, lon: longitude, timestamp: position.timestamp };
+
+      renderOutput(latitude, longitude);
     }
 
     function onPositionError(error) {
-      outputDiv.innerHTML = `<strong>Error:</strong> ${error.message}`;
-      stopTracking();
+      stopTracking(`Error: ${error.message}`);
     }
 
-    function renderOutput(lat, lon, accuracy, distanceKm) {
-      let html = `🛰️ GPS Accuracy: ${accuracy.toFixed(0)} meters<br>`;
-      html += `📍 Current Location: (${lat.toFixed(5)}, ${lon.toFixed(5)})<br>`;
-      html += `📏 Distance to Go: <strong>${distanceKm.toFixed(2)} km</strong><br>`;
-      html += `🚀 Smoothed Speed: <strong>${state.smoothedSpeedKmh.toFixed(1)} km/h</strong><br>`;
-
-      if (state.smoothedSpeedKmh > state.minSpeedForEtaKmh) {
-        const etaHours = distanceKm / state.smoothedSpeedKmh;
-        const arrivalTime = new Date(Date.now() + etaHours * 3600 * 1000);
-
-        html += `⏱️ ETA: ${formatDuration(etaHours * 3600)}<br>`;
-        html += `🕓 Est. Arrival: ${arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-      } else {
-        html += `⏱️ ETA: Calculating... (move faster for an estimate)`;
+    function renderOutput(currentLat, currentLon) {
+      const remainingStraightLineKm = getDistance(currentLat, currentLon, state.destination.lat, state.destination.lon);
+      
+      if (remainingStraightLineKm * 1000 < config.ARRIVAL_THRESHOLD_METERS) {
+        stopTracking("You have arrived!");
+        return;
       }
 
-      outputDiv.innerHTML = html;
+      // **ACCURACY UPGRADE**: Apply the correction factor for a realistic road distance.
+      const effectiveRemainingKm = remainingStraightLineKm * config.ROAD_TO_STRAIGHT_LINE_RATIO;
+      
+      let journeyAvgSpeedKmh = 0;
+      if (state.totalTimeMovingSeconds > 0) {
+        // **ACCURACY UPGRADE**: Calculate the stable average speed based on moving time.
+        journeyAvgSpeedKmh = state.totalDistanceTraveledKm / (state.totalTimeMovingSeconds / 3600);
+      }
+      
+      let etaHtml = ``;
+      if (journeyAvgSpeedKmh > config.MIN_SPEED_FOR_MOVING_KMH) {
+        const etaHours = effectiveRemainingKm / journeyAvgSpeedKmh;
+        const arrivalTime = new Date(Date.now() + etaHours * 3600 * 1000);
+
+        etaHtml = `
+          ⏱️ ETA: <span class="output-value">${formatDuration(etaHours * 3600)}</span><br>
+          🕓 Est. Arrival: <span class="output-value">${arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        `;
+      } else {
+        etaHtml = `⏱️ ETA: <span class="output-value">Calculating...</span><br>
+                   <span style="font-size:14px;">(Start moving to generate an estimate)</span>`;
+      }
+
+      outputDiv.innerHTML = `
+        🚀 Current Speed: <span class="output-value">${state.currentSpeedKmh.toFixed(1)} km/h</span><br>
+        📈 Journey Avg (Moving): <span class="output-value">${journeyAvgSpeedKmh.toFixed(1)} km/h</span><br>
+        📏 Est. Distance Left: <span class="output-value">${effectiveRemainingKm.toFixed(2)} km</span><br>
+        ${etaHtml}
+      `;
     }
 
     // --- Utility Functions ---
-
     function formatDuration(totalSeconds) {
-      if (totalSeconds < 60) return `${Math.round(totalSeconds)} seconds`;
-      const hours = Math.floor(totalSeconds / 3600);
-      const minutes = Math.floor((totalSeconds % 3600) / 60);
+        if (isNaN(totalSeconds) || totalSeconds < 0) return "Calculating...";
+        if (totalSeconds < 60) return `${Math.round(totalSeconds)} seconds`;
+        
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.round((totalSeconds % 3600) / 60);
 
-      let parts = [];
-      if (hours > 0) parts.push(`${hours} hour${hours > 1 ? 's' : ''}`);
-      if (minutes > 0) parts.push(`${minutes} minute${minutes > 1 ? 's' : ''}`);
-      return parts.join(', ');
+        let parts = [];
+        if (hours > 0) parts.push(`${hours} hour${hours > 1 ? 's' : ''}`);
+        if (minutes > 0) parts.push(`${minutes} minute${minutes > 1 ? 's' : ''}`);
+        
+        return parts.length > 0 ? parts.join(', ') : 'Less than a minute';
     }
     
     function getDistance(lat1, lon1, lat2, lon2) {
       const R = 6371; // Radius of the Earth in km
-      const dLat = deg2rad(lat2 - lat1);
-      const dLon = deg2rad(lon2 - lon1);
+      const dLat = (lat2 - lat1) * (Math.PI / 180);
+      const dLon = (lon2 - lon1) * (Math.PI / 180);
       const a =
         Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) *
         Math.sin(dLon / 2) * Math.sin(dLon / 2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       return R * c;
     }
 
-    function deg2rad(deg) {
-      return deg * (Math.PI / 180);
-    }
-
-    function toggleButtons(isTracking) {
+    function toggleUI(isTracking) {
         startBtn.style.display = isTracking ? 'none' : 'block';
-        startBtn.disabled = isTracking;
         stopBtn.style.display = isTracking ? 'block' : 'none';
         destLatInput.disabled = isTracking;
         destLonInput.disabled = isTracking;
