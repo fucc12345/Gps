@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live ETA Calculator</title>
+  <title>Accurate ETA Calculator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     * { box-sizing: border-box; }
@@ -75,7 +75,7 @@
 </head>
 <body>
   <div class="container">
-    <h1>ETA Calculator</h1>
+    <h1>Accurate ETA Calculator</h1>
 
     <label for="destLat">Destination Latitude:</label>
     <input type="number" step="any" id="destLat" placeholder="e.g. 16.2346">
@@ -91,6 +91,7 @@
 
   <script>
     let intervalId;
+    let speedHistory = [];
 
     function startTracking() {
       const destLat = parseFloat(document.getElementById("destLat").value);
@@ -101,54 +102,66 @@
         return;
       }
 
-      // Save destination to localStorage
+      // Save to memory
       localStorage.setItem("destLat", destLat);
       localStorage.setItem("destLon", destLon);
 
       if (intervalId) clearInterval(intervalId);
+      speedHistory = [];
 
       intervalId = setInterval(() => {
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             position => {
               const { latitude, longitude, speed } = position.coords;
-              const currentSpeed = speed ?? 10; // fallback speed in m/s
+
+              const rawSpeed = speed ?? 0; // fallback to 0 if null
+              const speedKmh = rawSpeed * 3.6;
+
+              // Filter out unrealistic speeds
+              if (speedKmh > 2 && speedKmh < 160) {
+                speedHistory.push(speedKmh);
+              }
+
+              if (speedHistory.length > 5) speedHistory.shift(); // keep last 5
+
+              const avgSpeedKmh = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
 
               const distanceKm = getDistance(latitude, longitude, destLat, destLon);
-              const speedKmh = currentSpeed * 3.6;
-              const etaHours = distanceKm / (speedKmh || 1);
-              const etaMinutes = Math.round(etaHours * 60);
+              let etaText = `📍 Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>`;
+              etaText += `📏 Distance Left: ${distanceKm.toFixed(2)} km<br>`;
+              etaText += `🚀 Avg Speed: ${avgSpeedKmh.toFixed(2)} km/h<br>`;
 
-              // Arrival time calculation
-              const now = new Date();
-              const arrivalTime = new Date(now.getTime() + etaHours * 3600000);
-              const arrivalFormatted = arrivalTime.toLocaleTimeString('en-GB', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false
-              });
+              if (avgSpeedKmh > 5) {
+                const etaHours = distanceKm / avgSpeedKmh;
+                const etaMinutes = Math.round(etaHours * 60);
+                const now = new Date();
+                const arrivalTime = new Date(now.getTime() + etaHours * 3600000);
+                const arrivalFormatted = arrivalTime.toLocaleTimeString('en-GB', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false
+                });
 
-              document.getElementById("output").innerHTML = `
-                📍 Current Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>
-                🚀 Speed: ${speedKmh.toFixed(2)} km/h<br>
-                📏 Distance Left: ${distanceKm.toFixed(2)} km<br>
-                ⏱️ ETA: ${etaMinutes} minutes (${etaHours.toFixed(2)} hrs)<br>
-                🕓 Estimated Arrival Time: ${arrivalFormatted}
-              `;
+                etaText += `⏱️ ETA: ${etaMinutes} minutes (${etaHours.toFixed(2)} hrs)<br>`;
+                etaText += `🕓 Estimated Arrival: ${arrivalFormatted}`;
+              } else {
+                etaText += `⏱️ ETA: Calculating... (insufficient speed data)`;
+              }
+
+              document.getElementById("output").innerHTML = etaText;
             },
             error => {
               document.getElementById("output").innerText = "Error getting location: " + error.message;
             },
             { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
           );
-        } else {
-          document.getElementById("output").innerText = "Geolocation not supported.";
         }
       }, 1000);
     }
 
     function getDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371; // Radius of Earth in km
+      const R = 6371;
       const dLat = deg2rad(lat2 - lat1);
       const dLon = deg2rad(lon2 - lon1);
       const a =
@@ -163,13 +176,13 @@
       return deg * (Math.PI / 180);
     }
 
-    // Prefill previous destination from memory
+    // Prefill last destination
     window.onload = () => {
-      const storedLat = localStorage.getItem("destLat");
-      const storedLon = localStorage.getItem("destLon");
-      if (storedLat && storedLon) {
-        document.getElementById("destLat").value = storedLat;
-        document.getElementById("destLon").value = storedLon;
+      const lat = localStorage.getItem("destLat");
+      const lon = localStorage.getItem("destLon");
+      if (lat && lon) {
+        document.getElementById("destLat").value = lat;
+        document.getElementById("destLon").value = lon;
       }
     };
   </script>
