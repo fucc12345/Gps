@@ -2,166 +2,252 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Accurate ETA Calculator</title>
+  <title>Enhanced Accuracy ETA Calculator</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     * { box-sizing: border-box; }
     body {
       font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(to right, #6dd5fa, #ffffff);
+      background: linear-gradient(to right, #6dd5fa, #f0f8ff);
       margin: 0;
       padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
     }
 
     .container {
       max-width: 500px;
-      margin: auto;
+      width: 100%;
       background: #fff;
-      padding: 25px;
+      padding: 30px;
       border-radius: 15px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     }
 
     h1 {
       text-align: center;
-      color: #0077cc;
-      margin-bottom: 20px;
+      color: #005a9c;
+      margin-bottom: 25px;
     }
 
     label {
       font-weight: bold;
       display: block;
-      margin-top: 10px;
+      margin-top: 15px;
+      color: #333;
     }
 
     input {
       width: 100%;
-      padding: 10px;
+      padding: 12px;
       font-size: 16px;
       margin-top: 5px;
       border: 1px solid #ccc;
       border-radius: 8px;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+    input:focus {
+      border-color: #0077cc;
+      box-shadow: 0 0 5px rgba(0, 119, 204, 0.5);
+      outline: none;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
     }
 
     button {
       background-color: #0077cc;
       color: white;
-      padding: 12px;
+      padding: 14px;
       font-size: 16px;
+      font-weight: bold;
       border: none;
       border-radius: 8px;
-      margin-top: 15px;
       cursor: pointer;
       width: 100%;
+      transition: background-color 0.3s;
     }
 
     button:hover {
       background-color: #005fa3;
     }
 
+    button:disabled {
+      background-color: #a0a0a0;
+      cursor: not-allowed;
+    }
+
+    #stopBtn {
+      background-color: #d9534f;
+    }
+    #stopBtn:hover {
+      background-color: #c9302c;
+    }
+
     #output {
-      margin-top: 20px;
+      margin-top: 25px;
+      padding: 15px;
+      background-color: #f9f9f9;
+      border-radius: 8px;
+      border: 1px solid #eee;
       font-size: 16px;
-      line-height: 1.6;
+      line-height: 1.7;
     }
 
     .note {
-      font-size: 14px;
+      font-size: 13px;
       color: #777;
-      margin-top: 10px;
+      margin-top: 15px;
       text-align: center;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Accurate ETA Calculator</h1>
+    <h1>Enhanced Accuracy ETA Calculator</h1>
+    <p class="note">This tool estimates arrival time based on your device's GPS and straight-line distance. It does not account for roads or traffic.</p>
 
     <label for="destLat">Destination Latitude:</label>
-    <input type="number" step="any" id="destLat" placeholder="e.g. 16.2346">
+    <input type="number" step="any" id="destLat" placeholder="e.g., 40.7128">
 
     <label for="destLon">Destination Longitude:</label>
-    <input type="number" step="any" id="destLon" placeholder="e.g. 80.0515">
+    <input type="number" step="any" id="destLon" placeholder="e.g., -74.0060">
 
-    <button onclick="startTracking()">Start Tracking</button>
+    <div class="button-group">
+        <button id="startBtn" onclick="startTracking()">Start Tracking</button>
+        <button id="stopBtn" onclick="stopTracking()" style="display:none;">Stop Tracking</button>
+    </div>
 
-    <div id="output">Waiting for location...</div>
-    <div class="note">Updates every 1 second</div>
+    <div id="output">Enter a destination and press Start.</div>
   </div>
 
   <script>
-    let intervalId;
-    let speedHistory = [];
+    // --- State Management ---
+    const state = {
+      watchId: null,
+      destination: null,
+      // Exponential Moving Average (EMA) provides a smoothed, more realistic speed.
+      // A lower alpha value means more smoothing but slower reaction to speed changes.
+      emaAlpha: 0.3,
+      smoothedSpeedKmh: 0,
+      minSpeedForEtaKmh: 3, // Minimum speed to calculate an ETA
+      arrivalThresholdMeters: 50 // Auto-stop when within 50 meters
+    };
+
+    // --- UI Elements ---
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const outputDiv = document.getElementById('output');
+    const destLatInput = document.getElementById('destLat');
+    const destLonInput = document.getElementById('destLon');
 
     function startTracking() {
-      const destLat = parseFloat(document.getElementById("destLat").value);
-      const destLon = parseFloat(document.getElementById("destLon").value);
+      const destLat = parseFloat(destLatInput.value);
+      const destLon = parseFloat(destLonInput.value);
 
-      if (!destLat || !destLon) {
+      if (isNaN(destLat) || isNaN(destLon)) {
         alert("Please enter valid destination coordinates.");
         return;
       }
 
-      // Save to memory
+      // Save to localStorage for convenience
       localStorage.setItem("destLat", destLat);
       localStorage.setItem("destLon", destLon);
 
-      if (intervalId) clearInterval(intervalId);
-      speedHistory = [];
+      // Reset state for a new journey
+      if (state.watchId) navigator.geolocation.clearWatch(state.watchId);
+      state.destination = { lat: destLat, lon: destLon };
+      state.smoothedSpeedKmh = 0;
 
-      intervalId = setInterval(() => {
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            position => {
-              const { latitude, longitude, speed } = position.coords;
+      outputDiv.innerHTML = "Acquiring GPS signal...";
+      toggleButtons(true);
 
-              const rawSpeed = speed ?? 0; // fallback to 0 if null
-              const speedKmh = rawSpeed * 3.6;
+      const options = {
+        enableHighAccuracy: true,
+        maximumAge: 0, // Request fresh data each time
+        timeout: 10000 // Time to wait for a fix
+      };
 
-              // Filter out unrealistic speeds
-              if (speedKmh > 2 && speedKmh < 160) {
-                speedHistory.push(speedKmh);
-              }
-
-              if (speedHistory.length > 5) speedHistory.shift(); // keep last 5
-
-              const avgSpeedKmh = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
-
-              const distanceKm = getDistance(latitude, longitude, destLat, destLon);
-              let etaText = `📍 Location: (${latitude.toFixed(4)}, ${longitude.toFixed(4)})<br>`;
-              etaText += `📏 Distance Left: ${distanceKm.toFixed(2)} km<br>`;
-              etaText += `🚀 Avg Speed: ${avgSpeedKmh.toFixed(2)} km/h<br>`;
-
-              if (avgSpeedKmh > 5) {
-                const etaHours = distanceKm / avgSpeedKmh;
-                const etaMinutes = Math.round(etaHours * 60);
-                const now = new Date();
-                const arrivalTime = new Date(now.getTime() + etaHours * 3600000);
-                const arrivalFormatted = arrivalTime.toLocaleTimeString('en-GB', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  hour12: false
-                });
-
-                etaText += `⏱️ ETA: ${etaMinutes} minutes (${etaHours.toFixed(2)} hrs)<br>`;
-                etaText += `🕓 Estimated Arrival: ${arrivalFormatted}`;
-              } else {
-                etaText += `⏱️ ETA: Calculating... (insufficient speed data)`;
-              }
-
-              document.getElementById("output").innerHTML = etaText;
-            },
-            error => {
-              document.getElementById("output").innerText = "Error getting location: " + error.message;
-            },
-            { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-          );
-        }
-      }, 1000);
+      state.watchId = navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, options);
     }
 
+    function stopTracking() {
+      if (state.watchId) {
+        navigator.geolocation.clearWatch(state.watchId);
+        state.watchId = null;
+        outputDiv.innerHTML += "<br><strong>✅ Tracking stopped.</strong>";
+        toggleButtons(false);
+      }
+    }
+
+    function onPositionUpdate(position) {
+      const { latitude, longitude, speed, accuracy } = position.coords;
+      
+      // The device-provided speed (in m/s) is often more reliable than manual calculation.
+      // Fallback to 0 if null or not a number.
+      const currentSpeedMs = (typeof speed === 'number') ? speed : 0;
+      const currentSpeedKmh = currentSpeedMs * 3.6;
+
+      // Apply Exponential Moving Average to the speed. This is the core of the improvement.
+      // It smooths out erratic GPS speed readings for a much more stable ETA.
+      state.smoothedSpeedKmh = (state.emaAlpha * currentSpeedKmh) + (1 - state.emaAlpha) * state.smoothedSpeedKmh;
+
+      const distanceKm = getDistance(latitude, longitude, state.destination.lat, state.destination.lon);
+
+      // Check for arrival
+      if (distanceKm * 1000 < state.arrivalThresholdMeters) {
+        outputDiv.innerHTML = `🎉 <strong>You have arrived!</strong>`;
+        stopTracking();
+        return;
+      }
+
+      renderOutput(latitude, longitude, accuracy, distanceKm);
+    }
+
+    function onPositionError(error) {
+      outputDiv.innerHTML = `<strong>Error:</strong> ${error.message}`;
+      stopTracking();
+    }
+
+    function renderOutput(lat, lon, accuracy, distanceKm) {
+      let html = `🛰️ GPS Accuracy: ${accuracy.toFixed(0)} meters<br>`;
+      html += `📍 Current Location: (${lat.toFixed(5)}, ${lon.toFixed(5)})<br>`;
+      html += `📏 Distance to Go: <strong>${distanceKm.toFixed(2)} km</strong><br>`;
+      html += `🚀 Smoothed Speed: <strong>${state.smoothedSpeedKmh.toFixed(1)} km/h</strong><br>`;
+
+      if (state.smoothedSpeedKmh > state.minSpeedForEtaKmh) {
+        const etaHours = distanceKm / state.smoothedSpeedKmh;
+        const arrivalTime = new Date(Date.now() + etaHours * 3600 * 1000);
+
+        html += `⏱️ ETA: ${formatDuration(etaHours * 3600)}<br>`;
+        html += `🕓 Est. Arrival: ${arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      } else {
+        html += `⏱️ ETA: Calculating... (move faster for an estimate)`;
+      }
+
+      outputDiv.innerHTML = html;
+    }
+
+    // --- Utility Functions ---
+
+    function formatDuration(totalSeconds) {
+      if (totalSeconds < 60) return `${Math.round(totalSeconds)} seconds`;
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+      let parts = [];
+      if (hours > 0) parts.push(`${hours} hour${hours > 1 ? 's' : ''}`);
+      if (minutes > 0) parts.push(`${minutes} minute${minutes > 1 ? 's' : ''}`);
+      return parts.join(', ');
+    }
+    
     function getDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371;
+      const R = 6371; // Radius of the Earth in km
       const dLat = deg2rad(lat2 - lat1);
       const dLon = deg2rad(lon2 - lon1);
       const a =
@@ -176,13 +262,21 @@
       return deg * (Math.PI / 180);
     }
 
-    // Prefill last destination
+    function toggleButtons(isTracking) {
+        startBtn.style.display = isTracking ? 'none' : 'block';
+        startBtn.disabled = isTracking;
+        stopBtn.style.display = isTracking ? 'block' : 'none';
+        destLatInput.disabled = isTracking;
+        destLonInput.disabled = isTracking;
+    }
+
+    // --- On Page Load ---
     window.onload = () => {
       const lat = localStorage.getItem("destLat");
       const lon = localStorage.getItem("destLon");
       if (lat && lon) {
-        document.getElementById("destLat").value = lat;
-        document.getElementById("destLon").value = lon;
+        destLatInput.value = lat;
+        destLonInput.value = lon;
       }
     };
   </script>
